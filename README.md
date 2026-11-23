@@ -53,6 +53,19 @@ winget install BerkeOruc.oplire
 brew install berkeoruc/oplire/oplire
 ```
 
+### Windows (from source)
+```powershell
+git clone https://github.com/Vhierly/oplire.git
+cd oplire
+cargo build --release
+# binary ada di target\release\oplire.exe
+```
+
+`warp-cli` dicari di `C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe` (dan
+`Program Files (x86)`), jadi tetap jalan walau tidak ada di `PATH`. Reset versi Windows
+menjalankan `warp-cli disconnect` → `registration delete` → `registration new` →
+`connect`; langkah `systemctl`/`/var/lib/cloudflare-warp` hanya untuk Linux.
+
 ### From Source
 ```bash
 git clone https://github.com/BerkeOruc/oplire.git

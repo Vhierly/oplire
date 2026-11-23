@@ -1,8 +1,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::sync::Mutex;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
+
+use crate::platform;
 
 static ACTIVE_429_COUNT: AtomicU32 = AtomicU32::new(0);
 static RESET_IN_PROGRESS: Mutex<()> = Mutex::const_new(());
@@ -20,6 +21,9 @@ impl WarpResolver {
         }
     }
 
+    /// Called when the upstream answers HTTP 429. Runs a platform-specific WARP
+    /// reset (Linux service restart, Windows registration rebuild) and reports
+    /// whether the caller should retry the request.
     pub async fn handle_429(&self, retry_count: u32) -> bool {
         if retry_count >= self.max_retries {
             warn!(
@@ -44,8 +48,9 @@ impl WarpResolver {
             count
         );
 
-        if let Err(e) = self.reset_warp().await {
+        if let Err(e) = platform::reset_full(true) {
             error!("WARP reset failed: {}", e);
+            ACTIVE_429_COUNT.fetch_sub(1, Ordering::SeqCst);
             return false;
         }
 
@@ -54,82 +59,5 @@ impl WarpResolver {
 
         ACTIVE_429_COUNT.fetch_sub(1, Ordering::SeqCst);
         true
-    }
-
-    async fn reset_warp(&self) -> Result<(), String> {
-        info!("Step 1: warp-cli disconnect");
-        run_warp_command(&["disconnect"]).await?;
-
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-
-        info!("Step 2: systemctl stop warp-svc");
-        let stopped = run_sudo_command("systemctl stop warp-svc").await.is_ok();
-        if !stopped {
-            warn!("Stopping WARP service failed or skipped");
-        }
-
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        info!("Step 3: Clearing WARP cache");
-        if stopped {
-            if let Err(e) = run_sudo_command("rm -rf /var/lib/cloudflare-warp/*").await {
-                warn!("Clearing WARP cache failed or skipped: {}", e);
-            }
-        } else {
-            warn!("Skipping cache clear: service may still be running");
-        }
-
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        info!("Step 4: systemctl start warp-svc");
-        if let Err(e) = run_sudo_command("systemctl start warp-svc").await {
-            warn!("Starting WARP service failed or skipped: {}", e);
-        }
-
-        tokio::time::sleep(Duration::from_millis(2000)).await;
-
-        info!("Step 5: warp-cli registration new");
-        run_warp_command(&["registration", "new"]).await?;
-
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-
-        info!("Step 6: warp-cli connect");
-        run_warp_command(&["connect"]).await?;
-
-        info!("WARP tunnel reset complete");
-        Ok(())
-    }
-}
-
-async fn run_warp_command(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("warp-cli")
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to execute warp-cli: {}", e))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("warp-cli {:?} failed: {}", args, stderr.trim()))
-    }
-}
-
-async fn run_sudo_command(cmd: &str) -> Result<(), String> {
-    let output = Command::new("sudo")
-        .arg("-n")
-        .arg("sh")
-        .arg("-c")
-        .arg(cmd)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to execute sudo {}: {}", cmd, e))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("sudo {} failed: {}", cmd, stderr.trim()))
     }
 }

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use oplire_reset::{ProxyConfig, AppConfig};
+use oplire_reset::{platform, ProxyConfig, AppConfig};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -144,6 +144,17 @@ fn config_path() -> PathBuf {
 }
 
 fn dirs_config_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        // Windows has no XDG by default; follow the shell convention
+        // (%APPDATA% for roaming config).
+        for key in ["APPDATA", "XDG_CONFIG_HOME", "LOCALAPPDATA"] {
+            if let Ok(dir) = std::env::var(key) {
+                if !dir.is_empty() {
+                    return Some(PathBuf::from(dir));
+                }
+            }
+        }
+    }
     if cfg!(target_os = "macos") {
         if let Ok(home) = std::env::var("HOME") {
             let mut p = PathBuf::from(home);
@@ -186,7 +197,7 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
 }
 
 fn check_warp_installed() -> bool {
-    Command::new("warp-cli").arg("--version").output().is_ok()
+    platform::warp_installed()
 }
 
 fn check_claude_installed() -> bool {
@@ -582,6 +593,21 @@ fn main() {
                 if warp_installed {
                     println!("{} WARP is already installed", "[INFO]".green());
                     println!("{} Run `oplire reset` to refresh your IP", "Tip:".cyan());
+                    return;
+                }
+
+                if cfg!(target_os = "windows") {
+                    print_step(1, "Installing Cloudflare WARP for Windows...");
+                    match platform::install_warp_windows(cli.verbose) {
+                        Ok(()) => {
+                            print_success("WARP installed");
+                            println!();
+                            println!("{}", "Next steps:".bold());
+                            println!("  1. {}", "warp-cli connect".bold().yellow());
+                            println!("  2. {}", "oplire reset".bold().yellow());
+                        }
+                        Err(e) => print_fail(&format!("Installation failed: {}", e)),
+                    }
                     return;
                 }
 
@@ -1026,27 +1052,15 @@ fn main() {
 
             println!("{}", "Quick-resetting WARP tunnel...".bold());
 
-            if cli.verbose {
-                eprintln!("{} Disconnecting...", "[DEBUG]".cyan());
+            if cli.dry_run {
+                println!("{} Would rebuild the WARP registration", "[DRY-RUN]".cyan());
+                return;
             }
-            let _ = run_command("warp-cli", &["disconnect"], cli.dry_run, cli.verbose);
 
-            if cli.verbose {
-                eprintln!("{} Registration new...", "[DEBUG]".cyan());
+            match platform::reset_quick(cli.verbose) {
+                Ok(()) => println!("{}", "Quick reset complete!".green().bold()),
+                Err(e) => print_fail(&format!("Quick reset failed: {}", e)),
             }
-            let _ = run_command(
-                "warp-cli",
-                &["registration", "new"],
-                cli.dry_run,
-                cli.verbose,
-            );
-
-            if cli.verbose {
-                eprintln!("{} Connecting...", "[DEBUG]".cyan());
-            }
-            let _ = run_command("warp-cli", &["connect"], cli.dry_run, cli.verbose);
-
-            println!("{}", "Quick reset complete!".green().bold());
         }
 
         Commands::Config { action } => match action {
@@ -1161,7 +1175,7 @@ fn main() {
 
             println!("{}", "Checking tunnel status...".dimmed());
 
-            match run_command("warp-cli", &["status"], cli.dry_run, cli.verbose) {
+            match platform::status_text() {
                 Ok(output) => {
                     let status_str = output.trim();
                     let connected =
@@ -1217,47 +1231,18 @@ fn main() {
 
             println!("{}", "Resetting WARP tunnel...".bold());
 
-            if cli.verbose {
-                eprintln!("{} Step 1: Disconnecting...", "[DEBUG]".cyan());
+            if cli.dry_run {
+                println!("{} Would rebuild the WARP registration", "[DRY-RUN]".cyan());
+                return;
             }
-            let _ = run_command("warp-cli", &["disconnect"], cli.dry_run, cli.verbose);
 
-            if cli.verbose {
-                eprintln!("{} Step 2: Stopping warp-svc...", "[DEBUG]".cyan());
+            match platform::reset_full(cli.verbose) {
+                Ok(()) => {
+                    println!("{}", "WARP tunnel reset complete!".green().bold());
+                    println!("{} Run `oplire status` to verify", "Tip:".cyan());
+                }
+                Err(e) => print_fail(&format!("WARP reset failed: {}", e)),
             }
-            let _ = run_sudo_command("systemctl stop warp-svc", cli.dry_run, cli.verbose);
-
-            if cli.verbose {
-                eprintln!("{} Step 3: Clearing cache...", "[DEBUG]".cyan());
-            }
-            let _ = run_sudo_command(
-                "rm -rf /var/lib/cloudflare-warp/*",
-                cli.dry_run,
-                cli.verbose,
-            );
-
-            if cli.verbose {
-                eprintln!("{} Step 4: Starting warp-svc...", "[DEBUG]".cyan());
-            }
-            let _ = run_sudo_command("systemctl start warp-svc", cli.dry_run, cli.verbose);
-
-            if cli.verbose {
-                eprintln!("{} Step 5: Registering new tunnel...", "[DEBUG]".cyan());
-            }
-            let _ = run_command(
-                "warp-cli",
-                &["registration", "new"],
-                cli.dry_run,
-                cli.verbose,
-            );
-
-            if cli.verbose {
-                eprintln!("{} Step 6: Connecting...", "[DEBUG]".cyan());
-            }
-            let _ = run_command("warp-cli", &["connect"], cli.dry_run, cli.verbose);
-
-            println!("{}", "WARP tunnel reset complete!".green().bold());
-            println!("{} Run `oplire status` to verify", "Tip:".cyan());
         }
 
         Commands::Stop {} => {
@@ -1269,23 +1254,18 @@ fn main() {
 
             println!("{}", "Stopping WARP tunnel...".bold());
 
-            if cli.verbose {
-                eprintln!("{} Step 1: Disconnecting...", "[DEBUG]".cyan());
+            if cli.dry_run {
+                println!("{} Would disconnect WARP", "[DRY-RUN]".cyan());
+                return;
             }
-            let _ = run_command("warp-cli", &["disconnect"], cli.dry_run, cli.verbose);
 
-            if cli.verbose {
-                eprintln!("{} Step 2: Stopping warp-svc...", "[DEBUG]".cyan());
+            match platform::stop(cli.verbose) {
+                Ok(()) => {
+                    println!("{}", "WARP tunnel stopped!".green().bold());
+                    println!("{} Run `oplire reset` to restart", "Tip:".cyan());
+                }
+                Err(e) => print_fail(&format!("Failed to stop WARP: {}", e)),
             }
-            let _ = run_sudo_command("systemctl stop warp-svc", cli.dry_run, cli.verbose);
-
-            if cli.verbose {
-                eprintln!("{} Step 3: Disabling warp-svc...", "[DEBUG]".cyan());
-            }
-            let _ = run_sudo_command("systemctl disable warp-svc", cli.dry_run, cli.verbose);
-
-            println!("{}", "WARP tunnel stopped!".green().bold());
-            println!("{} Run `oplire reset` to restart", "Tip:".cyan());
         }
 
         Commands::About {} => {

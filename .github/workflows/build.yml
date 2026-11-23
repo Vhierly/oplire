@@ -27,6 +27,11 @@ jobs:
             binary: oplire.exe
             ext: '.exe'
             os_name: windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: oplire.exe
+            ext: '.exe'
+            os_name: windows-msvc
           - os: macos-latest
             target: x86_64-apple-darwin
             binary: oplire
