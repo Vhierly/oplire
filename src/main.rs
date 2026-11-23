@@ -39,8 +39,8 @@ enum Commands {
     Proxy {
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: String,
-        #[arg(long, default_value = "http://localhost:3000")]
-        upstream: String,
+        #[arg(long)]
+        upstream: Option<String>,
         #[arg(long)]
         api_key: Option<String>,
         #[arg(long, default_value = "3")]
@@ -53,8 +53,8 @@ enum Commands {
         target: ConnectTarget,
     },
     Watch {
-        #[arg(long, default_value = "http://localhost:3000")]
-        upstream: String,
+        #[arg(long)]
+        upstream: Option<String>,
         #[arg(long, default_value = "3")]
         max_retries: u32,
         #[arg(long, default_value = "5000")]
@@ -63,8 +63,8 @@ enum Commands {
     Daemon {
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: String,
-        #[arg(long, default_value = "http://localhost:3000")]
-        upstream: String,
+        #[arg(long)]
+        upstream: Option<String>,
         #[arg(long)]
         api_key: Option<String>,
         #[arg(long, default_value = "3")]
@@ -79,8 +79,8 @@ enum Commands {
     Doctor {},
     Setup {},
     Models {
-        #[arg(long, default_value = "http://localhost:3000")]
-        upstream: String,
+        #[arg(long)]
+        upstream: Option<String>,
     },
 }
 
@@ -101,8 +101,8 @@ enum ConnectTarget {
     ClaudeCode {
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: String,
-        #[arg(long, default_value = "http://localhost:3000")]
-        upstream: String,
+        #[arg(long)]
+        upstream: Option<String>,
         #[arg(long)]
         api_key: Option<String>,
         #[arg(long, default_value = "3")]
@@ -126,8 +126,8 @@ enum ConfigAction {
         key: Option<String>,
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: String,
-        #[arg(long, default_value = "http://localhost:3000")]
-        upstream: String,
+        #[arg(long)]
+        upstream: Option<String>,
         #[arg(long, default_value = "3")]
         max_retries: u32,
         #[arg(long, default_value = "5000")]
@@ -184,6 +184,12 @@ fn load_config() -> AppConfig {
         }
     }
     AppConfig::default()
+}
+
+/// `--upstream` is optional; when omitted, fall back to the saved config so the
+/// config file stays the single source of truth.
+fn resolve_upstream(arg: &Option<String>) -> String {
+    arg.clone().unwrap_or_else(|| load_config().upstream)
 }
 
 fn save_config(config: &AppConfig) -> Result<(), String> {
@@ -434,6 +440,7 @@ fn main() {
 
     match &cli.command {
         Commands::Models { upstream } => {
+            let upstream = resolve_upstream(upstream);
             print_banner();
             println!("{}", "Available Models".bold().cyan());
             println!();
@@ -798,6 +805,7 @@ fn main() {
                 claude_args,
             },
         } => {
+            let upstream = resolve_upstream(upstream);
             print_banner();
             println!("{}", "Claude Code Bridge".bold().green());
             println!();
@@ -812,7 +820,7 @@ fn main() {
                 Some(m) => m.clone(),
                 None => {
                     println!("{} Fetching models from {}...", "→".cyan(), upstream.bold());
-                    match fetch_models(upstream) {
+                    match fetch_models(&upstream) {
                         Ok(models) => {
                             if models.is_empty() {
                                 println!("{} No models found, using default", "[WARN]".yellow());
@@ -906,6 +914,7 @@ fn main() {
             max_retries,
             warp_delay,
         } => {
+            let upstream = resolve_upstream(upstream);
             print_banner();
             println!("{}", "OpenCode Watch Mode".bold().yellow());
             println!();
@@ -941,6 +950,7 @@ fn main() {
             max_retries,
             warp_delay,
         } => {
+            let upstream = resolve_upstream(upstream);
             print_banner();
             println!("{}", "Daemon Mode".bold().magenta());
             println!();
@@ -1084,7 +1094,7 @@ fn main() {
                 let mut config = load_config();
 
                 config.listen = listen.clone();
-                config.upstream = upstream.clone();
+                config.upstream = resolve_upstream(upstream);
                 config.max_retries = *max_retries;
                 config.warp_delay = *warp_delay;
 
@@ -1122,6 +1132,7 @@ fn main() {
             max_retries,
             warp_delay,
         } => {
+            let upstream = resolve_upstream(upstream);
             let config = ProxyConfig {
                 listen_addr: listen.clone(),
                 opencode_base_url: upstream.clone(),
